@@ -279,25 +279,25 @@ class PomodoroApp(ctk.CTk):
         self._progress_fg_item = None
         self._time_text = self.bg_canvas.create_text(
             0, 0, text="25:00",
-            font=("Microsoft YaHei", 52, "bold"),
+            font=("Segoe UI", 56, "bold"),
             fill="white",
         )
         self._status_text = self.bg_canvas.create_text(
             0, 0, text="专注时间",
-            font=("Microsoft YaHei", 14),
-            fill="#8892B0",
+            font=("Segoe UI", 16, "bold"),
+            fill="white",
         )
         self._session_text = self.bg_canvas.create_text(
             0, 0, text="☕ 已完成: 0 个番茄",
-            font=("Microsoft YaHei", 11),
-            fill="#6C7A9D",
+            font=("Segoe UI", 12),
+            fill="#C0C0C0",
         )
 
         self.after(50, self._reposition_center_ui)
 
     def _reposition_center_ui(self, event=None):
-        cw = self.winfo_width() or 420
-        ch = self.winfo_height() or 520
+        cw = max(self.winfo_width(), 420)
+        ch = max(self.winfo_height(), 520)
         cx, cy = cw // 2, ch // 2
         r = 105
 
@@ -306,7 +306,7 @@ class PomodoroApp(ctk.CTk):
             self.bg_canvas.delete(self._progress_bg_item)
         self._progress_bg_item = self.bg_canvas.create_arc(
             cx - r, cy - r, cx + r, cy + r,
-            start=90, extent=360,
+            start=90, extent=359.999,
             outline="#2D3A5C", width=10, style="arc",
         )
 
@@ -327,8 +327,8 @@ class PomodoroApp(ctk.CTk):
             self._progress_fg_item = None
         if progress <= 0:
             return
-        cw = self.winfo_width() or 420
-        ch = self.winfo_height() or 520
+        cw = max(self.winfo_width(), 420)
+        ch = max(self.winfo_height(), 520)
         cx, cy = cw // 2, ch // 2
         r = 105
         self._progress_fg_item = self.bg_canvas.create_arc(
@@ -347,6 +347,9 @@ class PomodoroApp(ctk.CTk):
         self.bg_canvas.itemconfig(
             self._session_text, text=f"☕ 已完成: {self.timer.session_count} 个番茄"
         )
+        # Keep text on top of arcs
+        for t in (self._time_text, self._status_text, self._session_text):
+            self.bg_canvas.tag_raise(t)
 
     def _load_wallpaper(self, path):
         if self._wallpaper_canvas_item:
@@ -357,8 +360,8 @@ class PomodoroApp(ctk.CTk):
         if path and os.path.isfile(path):
             try:
                 img = Image.open(path)
-                w = self.winfo_width() or 420
-                h = self.winfo_height() or 520
+                w = max(self.winfo_width(), 420)
+                h = max(self.winfo_height(), 520)
                 img = img.resize((w, h), Image.LANCZOS)
                 self._wallpaper_image = ImageTk.PhotoImage(img)
                 self._wallpaper_canvas_item = self.bg_canvas.create_image(
@@ -375,11 +378,11 @@ class PomodoroApp(ctk.CTk):
             self.bg_canvas.delete(self._overlay_rect)
             self._overlay_rect = None
         if active:
-            w = self.winfo_width() or 420
-            h = self.winfo_height() or 520
+            w = max(self.winfo_width(), 420)
+            h = max(self.winfo_height(), 520)
             self._overlay_rect = self.bg_canvas.create_rectangle(
                 0, 0, w, h,
-                fill="#0A0A1E", stipple="gray25",
+                fill="#0A0A1E", stipple="gray50",
             )
             self.bg_canvas.tag_lower(self._overlay_rect)
             wallpaper = self._wallpaper_canvas_item
