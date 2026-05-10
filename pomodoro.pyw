@@ -4,6 +4,7 @@ Pomodoro Timer - 番茄钟桌面应用
 import json
 import os
 import threading
+import tkinter as tk
 import winsound
 from pathlib import Path
 
@@ -196,8 +197,9 @@ class PomodoroApp(ctk.CTk):
         super().__init__()
         self.settings = Settings()
         self.title("\U0001f345 番茄钟")
-        self._wallpaper_image = None  # keep reference to prevent GC
-        self._wallpaper_label = None
+        self._wallpaper_image = None
+        self._overlay_canvas = None
+        self._overlay_rect = None
         self._setup_window()
 
         self.timer = PomodoroTimer(
@@ -221,15 +223,18 @@ class PomodoroApp(ctk.CTk):
         self.minsize(380, 480)
         self.configure(fg_color="#1A1A2E")
         self.attributes("-topmost", self.settings["always_on_top"])
-        self._wallpaper_label = ctk.CTkLabel(self, text="", fg_color="transparent")
-        self._wallpaper_label.place(x=0, y=0, relwidth=1, relheight=1)
-        self._wallpaper_label.lower()
+
+        # Background canvas — draws wallpaper image, NOT a child of any CTk frame
+        self.bg_canvas = tk.Canvas(self, highlightthickness=0, bg="#1A1A2E")
+        self.bg_canvas.pack(fill="both", expand=True)
+        self._wallpaper_canvas_item = None
 
     def _build_ui(self):
-        self.main = ctk.CTkFrame(self, fg_color="transparent")
+        # Main container frame placed directly on the bg_canvas
+        self.main = ctk.CTkFrame(self.bg_canvas, fg_color=None, corner_radius=0)
         self.main.pack(fill="both", expand=True, padx=20, pady=20)
 
-        self.mode_frame = ctk.CTkFrame(self.main, fg_color="transparent")
+        self.mode_frame = ctk.CTkFrame(self.main, fg_color=None)
         self.mode_frame.pack(pady=(0, 15))
         self.mode_selector = ctk.CTkSegmentedButton(
             self.mode_frame,
@@ -241,20 +246,19 @@ class PomodoroApp(ctk.CTk):
         )
         self.mode_selector.pack()
 
-        self.display_frame = ctk.CTkFrame(
-            self.main, fg_color="#16213E", corner_radius=20
-        )
+        # Display area —— use a CTkFrame with None bg so the wallpaper shows through
+        self.display_frame = ctk.CTkFrame(self.main, fg_color=None, corner_radius=20)
         self.display_frame.pack(fill="both", expand=True, pady=10)
 
         self.canvas_size = 260
-        self.canvas = ctk.CTkCanvas(
+        self.progress_canvas = tk.Canvas(
             self.display_frame,
             width=self.canvas_size,
             height=self.canvas_size,
-            bg="#16213E",
+            bg="#1A1A2E",
             highlightthickness=0,
         )
-        self.canvas.pack(pady=(20, 5))
+        self.progress_canvas.pack(pady=(20, 5))
 
         self.time_label = ctk.CTkLabel(
             self.display_frame,
@@ -281,7 +285,7 @@ class PomodoroApp(ctk.CTk):
         )
         self.session_label.place(relx=0.5, rely=0.78, anchor="center")
 
-        self.control_frame = ctk.CTkFrame(self.main, fg_color="transparent")
+        self.control_frame = ctk.CTkFrame(self.main, fg_color=None)
         self.control_frame.pack(pady=(15, 5))
 
         btn_font = ctk.CTkFont(size=15, weight="bold")
@@ -327,7 +331,7 @@ class PomodoroApp(ctk.CTk):
     def _draw_bg_circle(self):
         w = self.canvas_size
         cx = cy = w // 2
-        self.canvas.create_arc(
+        self.progress_canvas.create_arc(
             cx - 105, cy - 105, cx + 105, cy + 105,
             start=90, extent=360,
             outline="#2D3A5C", width=10, style="arc",
@@ -335,12 +339,12 @@ class PomodoroApp(ctk.CTk):
         )
 
     def _draw_progress(self, progress):
-        self.canvas.delete("progress")
+        self.progress_canvas.delete("progress")
         if progress <= 0:
             return
         w = self.canvas_size
         cx = cy = w // 2
-        self.canvas.create_arc(
+        self.progress_canvas.create_arc(
             cx - 105, cy - 105, cx + 105, cy + 105,
             start=90, extent=-360 * progress,
             outline=self._current_color["progress"], width=10, style="arc",
@@ -357,20 +361,43 @@ class PomodoroApp(ctk.CTk):
         self.session_var.set(f"☕ 已完成: {self.timer.session_count} 个番茄")
 
     def _load_wallpaper(self, path):
-        if not path or not os.path.isfile(path):
-            self._wallpaper_label.configure(image="", fg_color="transparent")
-            self._wallpaper_image = None
-            return
-        try:
-            img = Image.open(path)
+        if self._wallpaper_canvas_item:
+            self.bg_canvas.delete(self._wallpaper_canvas_item)
+            self._wallpaper_canvas_item = None
+        self._wallpaper_image = None
+
+        if path and os.path.isfile(path):
+            try:
+                img = Image.open(path)
+                w = self.winfo_width() or 420
+                h = self.winfo_height() or 520
+                img = img.resize((w, h), Image.LANCZOS)
+                self._wallpaper_image = ImageTk.PhotoImage(img)
+                self._wallpaper_canvas_item = self.bg_canvas.create_image(
+                    0, 0, anchor="nw", image=self._wallpaper_image
+                )
+                self.bg_canvas.tag_lower(self._wallpaper_canvas_item)
+            except Exception:
+                pass
+
+        # Toggle semi-transparent overlay for text readability
+        self._toggle_overlay(path and os.path.isfile(path))
+
+    def _toggle_overlay(self, active):
+        if self._overlay_rect:
+            self.bg_canvas.delete(self._overlay_rect)
+            self._overlay_rect = None
+        if active:
             w = self.winfo_width() or 420
             h = self.winfo_height() or 520
-            img = img.resize((w, h), Image.LANCZOS)
-            self._wallpaper_image = ImageTk.PhotoImage(img)
-            self._wallpaper_label.configure(image=self._wallpaper_image, fg_color="#1A1A2E")
-        except Exception:
-            self._wallpaper_label.configure(image="", fg_color="transparent")
-            self._wallpaper_image = None
+            self._overlay_rect = self.bg_canvas.create_rectangle(
+                0, 0, w, h,
+                fill="#0A0A1E", stipple="gray25", tags="overlay",
+            )
+            self.bg_canvas.tag_lower(self._overlay_rect)
+            if self._wallpaper_canvas_item:
+                self.bg_canvas.tag_raise(self._wallpaper_canvas_item, self._overlay_rect)
+        self.progress_canvas.configure(bg="#0A0A1E" if active else "#1A1A2E")
 
     def _on_window_resize(self, event):
         if event.widget is not self:
