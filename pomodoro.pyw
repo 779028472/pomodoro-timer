@@ -1,6 +1,10 @@
 """
 Pomodoro Timer - 番茄钟桌面应用
+
+Windows 桌面番茄钟应用，支持三种模式（专注/短休息/长休息）、
+自定义壁纸、系统桌面通知和提示音。
 """
+
 import json
 import os
 import threading
@@ -11,6 +15,11 @@ from pathlib import Path
 import customtkinter as ctk
 from plyer import notification
 from PIL import Image, ImageTk
+
+
+# ---------------------------------------------------------------------------
+# Constants & configuration
+# ---------------------------------------------------------------------------
 
 CONFIG_DIR = Path(os.environ.get("APPDATA", ".")) / "PomodoroTimer"
 CONFIG_FILE = CONFIG_DIR / "settings.json"
@@ -49,7 +58,21 @@ MODE_NOTIFY = {
 }
 
 
+# ---------------------------------------------------------------------------
+# File I/O helpers
+# ---------------------------------------------------------------------------
+
+
 def _read_json(path, default=None):
+    """Read and parse a JSON file safely.
+
+    Args:
+        path: Path to the JSON file.
+        default: Value returned on any failure (default: None).
+
+    Returns:
+        Parsed dict/list on success, ``default`` on failure.
+    """
     try:
         with open(path, "r") as f:
             return json.load(f)
@@ -58,6 +81,7 @@ def _read_json(path, default=None):
 
 
 def _write_json(path, data):
+    """Write data to a JSON file safely.  Silently ignores errors."""
     try:
         with open(path, "w") as f:
             json.dump(data, f, indent=2)
@@ -65,18 +89,28 @@ def _write_json(path, data):
         pass
 
 
+# ---------------------------------------------------------------------------
+# Settings manager
+# ---------------------------------------------------------------------------
+
+
 class Settings:
+    """Persistent app settings backed by a JSON file on disk."""
+
     def __init__(self):
+        """Initialise with DEFAULT_SETTINGS, then overlay saved values."""
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         self.data = dict(DEFAULT_SETTINGS)
         self._load()
 
     def _load(self):
+        """Merge saved settings into current data dict."""
         data = _read_json(CONFIG_FILE)
         if data:
             self.data.update(data)
 
     def save(self):
+        """Persist current settings dict to disk."""
         _write_json(CONFIG_FILE, self.data)
 
     def __getitem__(self, key):
@@ -86,8 +120,28 @@ class Settings:
         self.data[key] = value
 
 
+# ---------------------------------------------------------------------------
+# Timer core (thread-safe, UI-agnostic)
+# ---------------------------------------------------------------------------
+
+
 class PomodoroTimer:
+    """Countdown timer core with pause/resume and session tracking.
+
+    Runs its tick loop via a ``threading.Timer`` so the caller (usually the
+    UI thread) is never blocked.  Callbacks *on_tick* and *on_finish* fire
+    from the timer thread — the caller is responsible for dispatching back
+    to the UI thread if needed.
+    """
+
     def __init__(self, settings: Settings, on_tick=None, on_finish=None):
+        """Initialise timer.
+
+        Args:
+            settings: A ``Settings`` instance used to look up durations.
+            on_tick: Called every second with no arguments.
+            on_finish: Called once when the countdown reaches zero.
+        """
         self.settings = settings
         self.on_tick = on_tick
         self.on_finish = on_finish
@@ -102,9 +156,11 @@ class PomodoroTimer:
 
     @property
     def current_duration(self):
+        """Total seconds for the current mode (read from settings)."""
         return self.settings[self.mode] * 60
 
     def reset(self, mode=None):
+        """Reset timer to the full duration of *mode* (or keep current)."""
         if mode:
             self.mode = mode
         self.running = False
@@ -116,6 +172,7 @@ class PomodoroTimer:
             self.on_tick()
 
     def start(self):
+        """Begin or restart the countdown."""
         if self.remaining <= 0:
             self.reset()
         self.running = True
@@ -123,15 +180,18 @@ class PomodoroTimer:
         self._tick()
 
     def pause(self):
+        """Pause the countdown without resetting."""
         self.paused = True
         self.running = False
 
     def resume(self):
+        """Resume a paused countdown."""
         self.paused = False
         self.running = True
         self._tick()
 
     def toggle(self):
+        """Cycle between start → pause → resume → pause …"""
         if not self.running and not self.paused:
             self.start()
         elif self.running:
@@ -140,16 +200,19 @@ class PomodoroTimer:
             self.resume()
 
     def cancel(self):
+        """Stop the timer and cancel any pending tick."""
         self.running = False
         self.paused = False
         self._cancel_timer()
 
     def _cancel_timer(self):
+        """Cancel the active ``threading.Timer`` if one exists."""
         if self._timer:
             self._timer.cancel()
             self._timer = None
 
     def _tick(self):
+        """Decrement remaining time and schedule the next tick."""
         if not self.running or self.paused:
             return
         if self.remaining > 0:
@@ -164,35 +227,53 @@ class PomodoroTimer:
             self._handle_finish()
 
     def _handle_finish(self):
+        """Increment session count, persist, and fire finish callback."""
         self.session_count += 1
         self._save_session()
         if self.on_finish:
             self.on_finish()
 
     def format_time(self):
+        """Return remaining time as ``MM:SS``."""
         m, s = divmod(max(0, self.remaining), 60)
         return f"{m:02d}:{s:02d}"
 
     @property
     def progress(self):
+        """Return completion ratio ``0.0`` (not started) to ``1.0`` (done)."""
         if self.total == 0:
             return 0
         return 1 - (self.remaining / self.total)
 
     def switch_mode(self, mode):
+        """Change to *mode* and reset the timer."""
         self.mode = mode
         self.reset()
 
     def _save_session(self):
+        """Persist session count to ``session.json``."""
         _write_json(CONFIG_DIR / "session.json", {"count": self.session_count})
 
     def _load_session(self):
+        """Restore session count from ``session.json``."""
         data = _read_json(CONFIG_DIR / "session.json")
         if data:
             self.session_count = data.get("count", 0)
 
 
+# ---------------------------------------------------------------------------
+# Main application window
+# ---------------------------------------------------------------------------
+
+
 class PomodoroApp(ctk.CTk):
+    """Main application window.
+
+    Uses a single ``tk.Canvas`` (``bg_canvas``) for the wallpaper, overlay,
+    progress arcs, and text — no opaque CTk containers in the center area.
+    CTk widgets (mode selector, buttons) are packed at the top / bottom edges.
+    """
+
     def __init__(self):
         super().__init__()
         self.settings = Settings()
@@ -215,6 +296,7 @@ class PomodoroApp(ctk.CTk):
         self.bind("<Configure>", self._on_window_resize)
 
     def _setup_window(self):
+        """Configure window geometry, appearance mode, and background canvas."""
         ctk.set_appearance_mode(self.settings["theme"])
         self.geometry("420+{}+{}".format(
             (self.winfo_screenwidth() - 420) // 2,
@@ -224,13 +306,19 @@ class PomodoroApp(ctk.CTk):
         self.configure(fg_color="#1A1A2E")
         self.attributes("-topmost", self.settings["always_on_top"])
 
-        # Single canvas — wallpaper, arcs, and text all draw here
+        # Single canvas — wallpaper, overlay, arcs, and text all draw here
         self.bg_canvas = tk.Canvas(self, highlightthickness=0, bg="#1A1A2E")
         self.bg_canvas.pack(fill="both", expand=True)
         self._wallpaper_canvas_item = None
 
     def _build_ui(self):
-        # Mode selector bar — packed at top of bg_canvas
+        """Create mode selector, control buttons, and canvas text items.
+
+        Mode selector is packed at the top of ``bg_canvas``, buttons at the
+        bottom.  The center area is left empty — progress circle and text are
+        drawn as Canvas items directly on ``bg_canvas``.
+        """
+        # Mode selector bar
         self.mode_frame = ctk.CTkFrame(self.bg_canvas, fg_color=None)
         self.mode_frame.pack(side="top", pady=(18, 0))
         self.mode_selector = ctk.CTkSegmentedButton(
@@ -243,7 +331,7 @@ class PomodoroApp(ctk.CTk):
         )
         self.mode_selector.pack()
 
-        # Control buttons bar — packed at bottom of bg_canvas
+        # Control buttons bar
         self.control_frame = ctk.CTkFrame(self.bg_canvas, fg_color=None)
         self.control_frame.pack(side="bottom", pady=(0, 18))
         btn_font = ctk.CTkFont(size=15, weight="bold")
@@ -274,7 +362,7 @@ class PomodoroApp(ctk.CTk):
         )
         self.settings_btn.pack(side="left", padx=6)
 
-        # Center: progress circle + text drawn on bg_canvas (no Frame covering it)
+        # Canvas text items (positioned later by _reposition_center_ui)
         self._progress_bg_item = None
         self._progress_fg_item = None
         self._time_text = self.bg_canvas.create_text(
@@ -293,35 +381,48 @@ class PomodoroApp(ctk.CTk):
             fill="#C0C0C0",
         )
 
+        # Schedule initial centering after the window has its final size
         self.after(50, self._reposition_center_ui)
 
     def _reposition_center_ui(self, event=None):
+        """Redraw the progress arc and reposition text after a window resize.
+
+        Args:
+            event: tkinter ``<Configure>`` event (ignored if not from the window).
+        """
         cw = max(self.winfo_width(), 420)
         ch = max(self.winfo_height(), 520)
         cx, cy = cw // 2, ch // 2
         r = 105
 
-        # Background arc
+        # Background arc (full ring track)
         if self._progress_bg_item:
             self.bg_canvas.delete(self._progress_bg_item)
+        # extent 359.999 avoids a visible gap at the arc start/end join point
         self._progress_bg_item = self.bg_canvas.create_arc(
             cx - r, cy - r, cx + r, cy + r,
             start=90, extent=359.999,
             outline="#2D3A5C", width=10, style="arc",
         )
 
-        # Reposition text
+        # Text positions
         self.bg_canvas.coords(self._time_text, cx, cy - 8)
         self.bg_canvas.coords(self._status_text, cx, cy + 42)
         self.bg_canvas.coords(self._session_text, cx, cy + 74)
 
-        # Redraw foreground arc
+        # Redraw foreground (progress) arc
         if self._progress_fg_item:
             self.bg_canvas.delete(self._progress_fg_item)
             self._progress_fg_item = None
-        self._draw_progress(self.timer.progress if hasattr(self, 'timer') else 0)
+        progress = self.timer.progress if hasattr(self, 'timer') else 0
+        self._draw_progress(progress)
 
     def _draw_progress(self, progress):
+        """Draw or update the foreground progress arc.
+
+        Args:
+            progress: Float ``0.0`` → ``1.0``.
+        """
         if self._progress_fg_item:
             self.bg_canvas.delete(self._progress_fg_item)
             self._progress_fg_item = None
@@ -339,19 +440,29 @@ class PomodoroApp(ctk.CTk):
 
     @property
     def _current_color(self):
+        """Return ``THEME_COLORS[mode]`` or fall back to ``pomodoro``."""
         return THEME_COLORS.get(self.timer.mode, THEME_COLORS["pomodoro"])
 
     def _update_display(self):
+        """Refresh time text, progress arc, and session counter on the canvas."""
         self.bg_canvas.itemconfig(self._time_text, text=self.timer.format_time())
         self._draw_progress(self.timer.progress)
         self.bg_canvas.itemconfig(
             self._session_text, text=f"☕ 已完成: {self.timer.session_count} 个番茄"
         )
-        # Keep text on top of arcs
+        # _draw_progress creates new canvas items on top of text
         for t in (self._time_text, self._status_text, self._session_text):
             self.bg_canvas.tag_raise(t)
 
     def _load_wallpaper(self, path):
+        """Load and display a wallpaper image on ``bg_canvas``.
+
+        Removes the previous wallpaper and overlay before loading.  The image
+        is resized to match the current window dimensions.
+
+        Args:
+            path: Filesystem path to an image file, or empty string to clear.
+        """
         if self._wallpaper_canvas_item:
             self.bg_canvas.delete(self._wallpaper_canvas_item)
             self._wallpaper_canvas_item = None
@@ -374,6 +485,14 @@ class PomodoroApp(ctk.CTk):
         self._toggle_overlay(path and os.path.isfile(path))
 
     def _toggle_overlay(self, active):
+        """Add or remove the semi-transparent dark overlay over the wallpaper.
+
+        The overlay uses a ``stipple`` pattern so the wallpaper remains
+        partially visible underneath.
+
+        Args:
+            active: ``True`` to show the overlay, ``False`` to remove it.
+        """
         if self._overlay_rect:
             self.bg_canvas.delete(self._overlay_rect)
             self._overlay_rect = None
@@ -388,7 +507,7 @@ class PomodoroApp(ctk.CTk):
             wallpaper = self._wallpaper_canvas_item
             if wallpaper:
                 self.bg_canvas.tag_raise(wallpaper, self._overlay_rect)
-        # Raise arcs/text above overlay so they remain visible
+        # Raise arcs/text above the overlay so they are fully visible
         if self._progress_bg_item:
             self.bg_canvas.tag_raise(self._progress_bg_item)
         if self._progress_fg_item:
@@ -397,6 +516,8 @@ class PomodoroApp(ctk.CTk):
             self.bg_canvas.tag_raise(t)
 
     def _on_window_resize(self, event):
+        """Debounced handler for window resize.  Waits 200 ms of inactivity
+        before repositioning the UI and reloading the wallpaper."""
         if event.widget is not self:
             return
         if getattr(self, '_resize_timer', None):
@@ -404,18 +525,22 @@ class PomodoroApp(ctk.CTk):
         self._resize_timer = self.after(200, self._on_resize_done)
 
     def _on_resize_done(self):
+        """Finalise a window resize: reposition the UI and reload wallpaper."""
         self._reposition_center_ui()
         self._load_wallpaper(self.settings.data.get(f"wallpaper_{self.timer.mode}", ""))
 
     def _on_timer_finish(self):
+        """Dispatch timer-completion logic to the UI thread."""
         self.after(0, self._on_finish_ui)
 
     def _on_finish_ui(self):
+        """Run finish actions on the UI thread: update, notify, switch mode."""
         self._update_display()
         self._notify_user()
         self._auto_switch_mode()
 
     def _notify_user(self):
+        """Play sound, show system notification, and briefly flash the window."""
         msg = MODE_NOTIFY.get(self.timer.mode, "时间到！")
 
         if self.settings["sound_enabled"]:
@@ -430,12 +555,14 @@ class PomodoroApp(ctk.CTk):
         except Exception:
             pass
 
+        # Flash window to top so the user sees the notification
         self.attributes("-topmost", True)
         self.after(2000, lambda: self.attributes(
             "-topmost", self.settings["always_on_top"]
         ))
 
     def _play_sound(self):
+        """Play the custom WAV file, or a 3-beep fallback, in a daemon thread."""
         def _play():
             try:
                 winsound.PlaySound(str(SOUND_FILE), winsound.SND_FILENAME)
@@ -448,6 +575,11 @@ class PomodoroApp(ctk.CTk):
         threading.Thread(target=_play, daemon=True).start()
 
     def _auto_switch_mode(self):
+        """Automatically switch to the next mode after a timer finishes.
+
+        After a pomodoro: switch to short-break, or long-break every Nth.
+        After a break: switch back to pomodoro.
+        """
         if self.timer.mode == "pomodoro":
             count_since_long = self.timer.session_count % self.settings["long_break_interval"]
             if count_since_long == 0:
@@ -456,15 +588,18 @@ class PomodoroApp(ctk.CTk):
                 self._switch_to("short_break")
         else:
             self._switch_to("pomodoro")
+        # Breaks auto-start; pomodoro waits for user action
         self.timer.start()
 
     def _switch_to(self, mode):
+        """Programmatically switch to *mode* and update the UI."""
         idx = MODE_KEYS.index(mode)
         self.mode_selector.set(MODE_LABELS[idx])
         self.timer.switch_mode(mode)
         self._update_theme()
 
     def _on_mode_change(self, value):
+        """Handle user clicking a mode segment button."""
         mapping = {
             "Pomodoro": "pomodoro",
             "Short Break": "short_break",
@@ -475,6 +610,7 @@ class PomodoroApp(ctk.CTk):
         self._update_theme()
 
     def _update_theme(self):
+        """Apply the current mode's accent color and wallpaper to the UI."""
         mode = self.timer.mode
         colors = THEME_COLORS[mode]
         self.mode_selector.configure(
@@ -491,6 +627,7 @@ class PomodoroApp(ctk.CTk):
         self._update_display()
 
     def _on_start(self):
+        """Toggle between start, pause, and resume on the button."""
         if self.timer.paused:
             self.timer.resume()
             self.start_btn.configure(text="⏸  暂停")
@@ -502,20 +639,31 @@ class PomodoroApp(ctk.CTk):
             self.start_btn.configure(text="⏸  暂停")
 
     def _on_reset(self):
+        """Reset the timer to the full duration."""
         self.timer.reset()
         self.start_btn.configure(text="▶  开始")
         self._update_display()
 
     def _open_settings(self):
+        """Open the settings dialog."""
         SettingsDialog(self)
 
     def _on_close(self):
+        """Cancel the timer, destroy the window."""
         self.timer.cancel()
         self.destroy()
 
 
+# ---------------------------------------------------------------------------
+# Settings dialog
+# ---------------------------------------------------------------------------
+
+
 class SettingsDialog(ctk.CTkToplevel):
+    """Modal dialog for editing app settings (time durations, theme, wallpaper)."""
+
     def __init__(self, app):
+        """Initialise dialog positioned relative to the main window, modal."""
         super().__init__(app)
         self.app = app
         self.settings = app.settings
@@ -529,6 +677,7 @@ class SettingsDialog(ctk.CTkToplevel):
         self._build()
 
     def _build(self):
+        """Build all form fields: time entries, checkboxes, theme, wallpaper."""
         frame = ctk.CTkFrame(self, fg_color="transparent")
         frame.pack(fill="both", expand=True, padx=20, pady=20)
 
@@ -577,7 +726,9 @@ class SettingsDialog(ctk.CTkToplevel):
             row=row, column=0, padx=(0, 10), pady=(10, 5), sticky="w"
         )
         theme_map = {"system": "跟随系统", "light": "浅色", "dark": "深色"}
-        self.theme_var = ctk.StringVar(value=theme_map.get(self.settings["theme"], "跟随系统"))
+        self.theme_var = ctk.StringVar(
+            value=theme_map.get(self.settings["theme"], "跟随系统")
+        )
         theme_menu = ctk.CTkOptionMenu(
             frame,
             values=["跟随系统", "浅色", "深色"],
@@ -632,6 +783,7 @@ class SettingsDialog(ctk.CTkToplevel):
         ).pack(side="left", padx=5)
 
     def _save(self):
+        """Validate inputs, persist settings, and apply changes to the app."""
         try:
             for key in MODE_KEYS:
                 val = int(self.entries[key].get())
@@ -666,6 +818,7 @@ class SettingsDialog(ctk.CTkToplevel):
             mb.showerror("输入错误", "请输入有效的正整数！", parent=self)
 
     def _pick_wallpaper(self, key, var):
+        """Open a file picker and set *var* to the chosen path."""
         from tkinter import filedialog
         path = filedialog.askopenfilename(
             parent=self,
@@ -675,6 +828,10 @@ class SettingsDialog(ctk.CTkToplevel):
         if path:
             var.set(path)
 
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     app = PomodoroApp()
