@@ -224,18 +224,15 @@ class PomodoroApp(ctk.CTk):
         self.configure(fg_color="#1A1A2E")
         self.attributes("-topmost", self.settings["always_on_top"])
 
-        # Background canvas — draws wallpaper image, NOT a child of any CTk frame
+        # Single canvas — wallpaper, arcs, and text all draw here
         self.bg_canvas = tk.Canvas(self, highlightthickness=0, bg="#1A1A2E")
         self.bg_canvas.pack(fill="both", expand=True)
         self._wallpaper_canvas_item = None
 
     def _build_ui(self):
-        # Main container frame placed directly on the bg_canvas
-        self.main = ctk.CTkFrame(self.bg_canvas, fg_color=None, corner_radius=0)
-        self.main.pack(fill="both", expand=True, padx=20, pady=20)
-
-        self.mode_frame = ctk.CTkFrame(self.main, fg_color=None)
-        self.mode_frame.pack(pady=(0, 15))
+        # Mode selector bar — packed at top of bg_canvas
+        self.mode_frame = ctk.CTkFrame(self.bg_canvas, fg_color=None)
+        self.mode_frame.pack(side="top", pady=(18, 0))
         self.mode_selector = ctk.CTkSegmentedButton(
             self.mode_frame,
             values=MODE_LABELS,
@@ -246,97 +243,98 @@ class PomodoroApp(ctk.CTk):
         )
         self.mode_selector.pack()
 
-        self.canvas_size = 260
-        self.progress_canvas = tk.Canvas(
-            self.main,
-            width=self.canvas_size,
-            height=self.canvas_size,
-            bg="#1A1A2E",
-            highlightthickness=0,
-        )
-        self.progress_canvas.pack(pady=(10, 0))
-
-        # Draw text directly on the canvas — no opaque label backgrounds
-        self._time_text = self.progress_canvas.create_text(
-            130, 122, text="25:00",
-            font=("Microsoft YaHei", 52, "bold"),
-            fill="white", tags="time_text",
-        )
-        self._status_text = self.progress_canvas.create_text(
-            130, 170, text="专注时间",
-            font=("Microsoft YaHei", 14),
-            fill="#8892B0", tags="status_text",
-        )
-        self._session_text = self.progress_canvas.create_text(
-            130, 202, text="☕ 已完成: 0 个番茄",
-            font=("Microsoft YaHei", 11),
-            fill="#6C7A9D", tags="session_text",
-        )
-
-        self.control_frame = ctk.CTkFrame(self.main, fg_color=None)
-        self.control_frame.pack(pady=(15, 5))
-
+        # Control buttons bar — packed at bottom of bg_canvas
+        self.control_frame = ctk.CTkFrame(self.bg_canvas, fg_color=None)
+        self.control_frame.pack(side="bottom", pady=(0, 18))
         btn_font = ctk.CTkFont(size=15, weight="bold")
         self.start_btn = ctk.CTkButton(
             self.control_frame,
             text="▶  开始",
-            width=140,
-            height=45,
-            corner_radius=25,
+            width=140, height=45, corner_radius=25,
             font=btn_font,
             command=self._on_start,
         )
         self.start_btn.pack(side="left", padx=6)
-
         self.reset_btn = ctk.CTkButton(
             self.control_frame,
             text="⟳  重置",
-            width=100,
-            height=45,
-            corner_radius=25,
+            width=100, height=45, corner_radius=25,
             font=btn_font,
-            fg_color="#2D3A5C",
-            hover_color="#3D4A6C",
+            fg_color="#2D3A5C", hover_color="#3D4A6C",
             command=self._on_reset,
         )
         self.reset_btn.pack(side="left", padx=6)
-
         self.settings_btn = ctk.CTkButton(
             self.control_frame,
             text="⚙",
-            width=45,
-            height=45,
-            corner_radius=25,
+            width=45, height=45, corner_radius=25,
             font=ctk.CTkFont(size=18),
-            fg_color="#2D3A5C",
-            hover_color="#3D4A6C",
+            fg_color="#2D3A5C", hover_color="#3D4A6C",
             command=self._open_settings,
         )
         self.settings_btn.pack(side="left", padx=6)
 
-        self._draw_bg_circle()
-
-    def _draw_bg_circle(self):
-        w = self.canvas_size
-        cx = cy = w // 2
-        self.progress_canvas.create_arc(
-            cx - 105, cy - 105, cx + 105, cy + 105,
-            start=90, extent=360,
-            outline="#2D3A5C", width=10, style="arc",
-            tags="bg",
+        # Center: progress circle + text drawn on bg_canvas (no Frame covering it)
+        self._progress_bg_item = None
+        self._progress_fg_item = None
+        self._time_text = self.bg_canvas.create_text(
+            0, 0, text="25:00",
+            font=("Microsoft YaHei", 52, "bold"),
+            fill="white",
+        )
+        self._status_text = self.bg_canvas.create_text(
+            0, 0, text="专注时间",
+            font=("Microsoft YaHei", 14),
+            fill="#8892B0",
+        )
+        self._session_text = self.bg_canvas.create_text(
+            0, 0, text="☕ 已完成: 0 个番茄",
+            font=("Microsoft YaHei", 11),
+            fill="#6C7A9D",
         )
 
+        self.after(50, self._reposition_center_ui)
+
+    def _reposition_center_ui(self, event=None):
+        cw = self.winfo_width() or 420
+        ch = self.winfo_height() or 520
+        cx, cy = cw // 2, ch // 2
+        r = 105
+
+        # Background arc
+        if self._progress_bg_item:
+            self.bg_canvas.delete(self._progress_bg_item)
+        self._progress_bg_item = self.bg_canvas.create_arc(
+            cx - r, cy - r, cx + r, cy + r,
+            start=90, extent=360,
+            outline="#2D3A5C", width=10, style="arc",
+        )
+
+        # Reposition text
+        self.bg_canvas.coords(self._time_text, cx, cy - 8)
+        self.bg_canvas.coords(self._status_text, cx, cy + 42)
+        self.bg_canvas.coords(self._session_text, cx, cy + 74)
+
+        # Redraw foreground arc
+        if self._progress_fg_item:
+            self.bg_canvas.delete(self._progress_fg_item)
+            self._progress_fg_item = None
+        self._draw_progress(self.timer.progress if hasattr(self, 'timer') else 0)
+
     def _draw_progress(self, progress):
-        self.progress_canvas.delete("progress")
+        if self._progress_fg_item:
+            self.bg_canvas.delete(self._progress_fg_item)
+            self._progress_fg_item = None
         if progress <= 0:
             return
-        w = self.canvas_size
-        cx = cy = w // 2
-        self.progress_canvas.create_arc(
-            cx - 105, cy - 105, cx + 105, cy + 105,
+        cw = self.winfo_width() or 420
+        ch = self.winfo_height() or 520
+        cx, cy = cw // 2, ch // 2
+        r = 105
+        self._progress_fg_item = self.bg_canvas.create_arc(
+            cx - r, cy - r, cx + r, cy + r,
             start=90, extent=-360 * progress,
             outline=self._current_color["progress"], width=10, style="arc",
-            tags="progress",
         )
 
     @property
@@ -344,9 +342,9 @@ class PomodoroApp(ctk.CTk):
         return THEME_COLORS.get(self.timer.mode, THEME_COLORS["pomodoro"])
 
     def _update_display(self):
-        self.progress_canvas.itemconfig(self._time_text, text=self.timer.format_time())
+        self.bg_canvas.itemconfig(self._time_text, text=self.timer.format_time())
         self._draw_progress(self.timer.progress)
-        self.progress_canvas.itemconfig(
+        self.bg_canvas.itemconfig(
             self._session_text, text=f"☕ 已完成: {self.timer.session_count} 个番茄"
         )
 
@@ -370,7 +368,6 @@ class PomodoroApp(ctk.CTk):
             except Exception:
                 pass
 
-        # Toggle semi-transparent overlay for text readability
         self._toggle_overlay(path and os.path.isfile(path))
 
     def _toggle_overlay(self, active):
@@ -382,21 +379,29 @@ class PomodoroApp(ctk.CTk):
             h = self.winfo_height() or 520
             self._overlay_rect = self.bg_canvas.create_rectangle(
                 0, 0, w, h,
-                fill="#0A0A1E", stipple="gray25", tags="overlay",
+                fill="#0A0A1E", stipple="gray25",
             )
             self.bg_canvas.tag_lower(self._overlay_rect)
-            if self._wallpaper_canvas_item:
-                self.bg_canvas.tag_raise(self._wallpaper_canvas_item, self._overlay_rect)
-        self.progress_canvas.configure(bg="#0A0A1E" if active else "#1A1A2E")
+            wallpaper = self._wallpaper_canvas_item
+            if wallpaper:
+                self.bg_canvas.tag_raise(wallpaper, self._overlay_rect)
+        # Raise arcs/text above overlay so they remain visible
+        if self._progress_bg_item:
+            self.bg_canvas.tag_raise(self._progress_bg_item)
+        if self._progress_fg_item:
+            self.bg_canvas.tag_raise(self._progress_fg_item)
+        for t in (self._time_text, self._status_text, self._session_text):
+            self.bg_canvas.tag_raise(t)
 
     def _on_window_resize(self, event):
         if event.widget is not self:
             return
         if getattr(self, '_resize_timer', None):
             self.after_cancel(self._resize_timer)
-        self._resize_timer = self.after(200, self._reload_wallpaper)
+        self._resize_timer = self.after(200, self._on_resize_done)
 
-    def _reload_wallpaper(self):
+    def _on_resize_done(self):
+        self._reposition_center_ui()
         self._load_wallpaper(self.settings.data.get(f"wallpaper_{self.timer.mode}", ""))
 
     def _on_timer_finish(self):
@@ -474,11 +479,11 @@ class PomodoroApp(ctk.CTk):
             selected_hover_color=colors["fg"],
         )
 
-        self.progress_canvas.itemconfig(self._time_text, fill=colors["fg"])
+        self.bg_canvas.itemconfig(self._time_text, fill=colors["fg"])
 
         self.start_btn.configure(fg_color=colors["fg"], hover_color=colors["fg"])
 
-        self.progress_canvas.itemconfig(self._status_text, text=MODE_STATUS[mode])
+        self.bg_canvas.itemconfig(self._status_text, text=MODE_STATUS[mode])
         self._load_wallpaper(self.settings.data.get(f"wallpaper_{mode}", ""))
         self._update_display()
 
