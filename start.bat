@@ -1,1 +1,1 @@
-@start "" pythonw.exe "%~dp0pomodoro.pyw"
+@start "" "%~dp0dist\PomodoroTimer.exe"

@@ -1,1 +1,1 @@
-CreateObject("WScript.Shell").Run "pythonw.exe pomodoro.pyw", 0, False
+CreateObject("WScript.Shell").Run "dist\PomodoroTimer.exe", 0, False

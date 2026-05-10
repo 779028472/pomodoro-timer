@@ -7,8 +7,10 @@ Windows 桌面番茄钟应用，支持三种模式（专注/短休息/长休息�
 
 import json
 import os
+import sys
 import threading
 import tkinter as tk
+import winreg
 import winsound
 from pathlib import Path
 
@@ -33,6 +35,7 @@ DEFAULT_SETTINGS = {
     "always_on_top": False,
     "theme": "system",
     "sound_enabled": True,
+    "auto_start": False,
     "wallpaper_pomodoro": "",
     "wallpaper_short_break": "",
     "wallpaper_long_break": "",
@@ -87,6 +90,53 @@ def _write_json(path, data):
             json.dump(data, f, indent=2)
     except Exception:
         pass
+
+
+# ---------------------------------------------------------------------------
+# Auto-start helper (Windows registry)
+# ---------------------------------------------------------------------------
+
+REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+REG_NAME = "PomodoroTimer"
+
+
+def _get_app_path():
+    """Return the command line that launches this app.
+
+    When bundled by PyInstaller: the .exe path.
+    When running as script: ``pythonw.exe <script_path>``.
+    """
+    if hasattr(sys, 'frozen') and sys.frozen in ('windows_exe', 'console_exe'):
+        return sys.executable
+    script = os.path.abspath(__file__)
+    pythonw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+    if os.path.isfile(pythonw):
+        return f'"{pythonw}" "{script}"'
+    return f'pythonw.exe "{script}"'
+
+
+def _set_auto_start(enabled):
+    """Add or remove the app from Windows startup registry.
+
+    Args:
+        enabled: ``True`` to register auto-start, ``False`` to remove.
+    """
+    key_path = REG_KEY
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE)
+    except FileNotFoundError:
+        key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path)
+
+    try:
+        if enabled:
+            winreg.SetValueEx(key, REG_NAME, 0, winreg.REG_SZ, _get_app_path())
+        else:
+            try:
+                winreg.DeleteValue(key, REG_NAME)
+            except FileNotFoundError:
+                pass
+    finally:
+        winreg.CloseKey(key)
 
 
 # ---------------------------------------------------------------------------
@@ -282,6 +332,9 @@ class PomodoroApp(ctk.CTk):
         self._overlay_canvas = None
         self._overlay_rect = None
         self._setup_window()
+
+        # Sync auto-start registry with current setting
+        _set_auto_start(self.settings.data.get("auto_start", False))
 
         self.timer = PomodoroTimer(
             self.settings,
@@ -722,6 +775,13 @@ class SettingsDialog(ctk.CTkToplevel):
         ).grid(row=row, column=0, columnspan=2, pady=5, sticky="w")
 
         row += 1
+        self.auto_start_var = ctk.BooleanVar(value=self.settings.data.get("auto_start", False))
+        ctk.CTkCheckBox(
+            frame, text="开机自启动", variable=self.auto_start_var,
+            font=ctk.CTkFont(size=13),
+        ).grid(row=row, column=0, columnspan=2, pady=5, sticky="w")
+
+        row += 1
         ctk.CTkLabel(frame, text="主题:", font=ctk.CTkFont(size=13)).grid(
             row=row, column=0, padx=(0, 10), pady=(10, 5), sticky="w"
         )
@@ -798,6 +858,7 @@ class SettingsDialog(ctk.CTkToplevel):
 
             self.settings.data["always_on_top"] = self.top_var.get()
             self.settings.data["sound_enabled"] = self.sound_var.get()
+            self.settings.data["auto_start"] = self.auto_start_var.get()
 
             for key in ["wallpaper_pomodoro", "wallpaper_short_break", "wallpaper_long_break"]:
                 self.settings.data[key] = self.wallpaper_vars[key].get()
@@ -809,6 +870,7 @@ class SettingsDialog(ctk.CTkToplevel):
                 ctk.set_appearance_mode(new_theme)
 
             self.settings.save()
+            _set_auto_start(self.settings.data["auto_start"])
             self.app.attributes("-topmost", self.settings.data["always_on_top"])
             self.app.timer.reset()
             self.app._update_theme()
