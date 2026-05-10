@@ -246,44 +246,32 @@ class PomodoroApp(ctk.CTk):
         )
         self.mode_selector.pack()
 
-        # Display area —— use a CTkFrame with None bg so the wallpaper shows through
-        self.display_frame = ctk.CTkFrame(self.main, fg_color=None, corner_radius=20)
-        self.display_frame.pack(fill="both", expand=True, pady=10)
-
         self.canvas_size = 260
         self.progress_canvas = tk.Canvas(
-            self.display_frame,
+            self.main,
             width=self.canvas_size,
             height=self.canvas_size,
             bg="#1A1A2E",
             highlightthickness=0,
         )
-        self.progress_canvas.pack(pady=(20, 5))
+        self.progress_canvas.pack(pady=(10, 0))
 
-        self.time_label = ctk.CTkLabel(
-            self.display_frame,
-            text="25:00",
-            font=ctk.CTkFont(size=64, weight="bold"),
-            text_color="white",
+        # Draw text directly on the canvas — no opaque label backgrounds
+        self._time_text = self.progress_canvas.create_text(
+            130, 122, text="25:00",
+            font=("Microsoft YaHei", 52, "bold"),
+            fill="white", tags="time_text",
         )
-        self.time_label.place(relx=0.5, rely=0.48, anchor="center")
-
-        self.status_label = ctk.CTkLabel(
-            self.display_frame,
-            text="专注时间",
-            font=ctk.CTkFont(size=16),
-            text_color="#8892B0",
+        self._status_text = self.progress_canvas.create_text(
+            130, 170, text="专注时间",
+            font=("Microsoft YaHei", 14),
+            fill="#8892B0", tags="status_text",
         )
-        self.status_label.place(relx=0.5, rely=0.65, anchor="center")
-
-        self.session_var = ctk.StringVar(value="☕ 已完成: 0 个番茄")
-        self.session_label = ctk.CTkLabel(
-            self.display_frame,
-            textvariable=self.session_var,
-            font=ctk.CTkFont(size=13),
-            text_color="#6C7A9D",
+        self._session_text = self.progress_canvas.create_text(
+            130, 202, text="☕ 已完成: 0 个番茄",
+            font=("Microsoft YaHei", 11),
+            fill="#6C7A9D", tags="session_text",
         )
-        self.session_label.place(relx=0.5, rely=0.78, anchor="center")
 
         self.control_frame = ctk.CTkFrame(self.main, fg_color=None)
         self.control_frame.pack(pady=(15, 5))
@@ -356,9 +344,11 @@ class PomodoroApp(ctk.CTk):
         return THEME_COLORS.get(self.timer.mode, THEME_COLORS["pomodoro"])
 
     def _update_display(self):
-        self.time_label.configure(text=self.timer.format_time())
+        self.progress_canvas.itemconfig(self._time_text, text=self.timer.format_time())
         self._draw_progress(self.timer.progress)
-        self.session_var.set(f"☕ 已完成: {self.timer.session_count} 个番茄")
+        self.progress_canvas.itemconfig(
+            self._session_text, text=f"☕ 已完成: {self.timer.session_count} 个番茄"
+        )
 
     def _load_wallpaper(self, path):
         if self._wallpaper_canvas_item:
@@ -484,11 +474,11 @@ class PomodoroApp(ctk.CTk):
             selected_hover_color=colors["fg"],
         )
 
-        self.time_label.configure(text_color=colors["fg"])
+        self.progress_canvas.itemconfig(self._time_text, fill=colors["fg"])
 
         self.start_btn.configure(fg_color=colors["fg"], hover_color=colors["fg"])
 
-        self.status_label.configure(text=MODE_STATUS[mode])
+        self.progress_canvas.itemconfig(self._status_text, text=MODE_STATUS[mode])
         self._load_wallpaper(self.settings.data.get(f"wallpaper_{mode}", ""))
         self._update_display()
 
